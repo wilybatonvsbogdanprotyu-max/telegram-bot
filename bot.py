@@ -1,6 +1,6 @@
 import os
+import urllib.parse
 import requests
-import base64
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,7 +14,6 @@ TELEGRAM_TOKEN = os.environ["BOT_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
 TEXT_MODEL = "openai/gpt-oss-120b:free"
-IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 
 memory = {}
 
@@ -47,20 +46,13 @@ def ask_ai(user_id, text):
     return answer
 
 def generate_image(prompt):
-    url = "https://openrouter.ai/api/v1/images/generations"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {"model": IMAGE_MODEL, "prompt": prompt, "size": "1024x1024"}
-
-    r = requests.post(url, headers=headers, json=data, timeout=60)
+    encoded = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+    r = requests.get(url, timeout=120)
     if r.status_code != 200:
-        print("IMG error:", r.status_code, r.text[:300])
+        print("IMG error:", r.status_code, r.text[:200])
         return None
-
-    img_b64 = r.json()["data"][0]["b64_json"]
-    return base64.b64decode(img_b64)
+    return r.content
 
 async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
@@ -73,7 +65,10 @@ async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(photo=image)
     else:
         await update.message.reply_text("❌ ошибка генерации")
-    await msg.delete()
+    try:
+        await msg.delete()
+    except Exception:
+        pass
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
