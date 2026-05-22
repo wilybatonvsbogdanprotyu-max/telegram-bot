@@ -1,6 +1,7 @@
 import os
 import urllib.parse
 import requests
+from duckduckgo_search import DDGS
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -23,15 +24,34 @@ memory = {}
 
 def get_memory(user_id):
     if user_id not in memory:
-        memory[user_id] = [
-            {"role": "system", "content": "Ты дружелюбный полезный ассистент."}
-        ]
+        memory[user_id] = []
     return memory[user_id]
 
+def web_search(query):
+    try:
+        results = DDGS().text(query, max_results=3)
+        if not results:
+            return ""
+        parts = []
+        for r in results:
+            parts.append(f"- {r['title']}: {r['body'][:300]}")
+        return "\n".join(parts)
+    except Exception as e:
+        print(f"Search error: {e}")
+        return ""
+
 def ask_ai(user_id, text):
+    search_results = web_search(text)
+
+    system = "Ты дружелюбный полезный ассистент. Отвечай точно и актуально."
+    if search_results:
+        system += f"\n\nАктуальные данные из интернета:\n{search_results}\n\nИспользуй эти данные в ответе."
+
     messages = get_memory(user_id)
     messages.append({"role": "user", "content": text})
     memory[user_id] = messages[-12:]
+
+    full_messages = [{"role": "system", "content": system}] + memory[user_id]
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -40,10 +60,11 @@ def ask_ai(user_id, text):
 
     for model in MODELS:
         try:
-            data = {"model": model, "messages": memory[user_id]}
             r = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers, json=data, timeout=60
+                headers=headers,
+                json={"model": model, "messages": full_messages},
+                timeout=60
             )
             if r.status_code == 200:
                 answer = r.json()["choices"][0]["message"]["content"]
@@ -89,10 +110,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет!\n\n"
-        "Я бесплатный AI бот 🤖\n\n"
+        "Я AI бот с поиском в интернете 🤖🌐\n\n"
         "📌 Команды:\n"
         "/img <описание> — создать изображение\n\n"
-        "💬 Просто напиши вопрос — я отвечу"
+        "💬 Просто напиши вопрос — найду актуальный ответ"
     )
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -100,5 +121,5 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("img", img))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-print("Бот запущен!")
+print("Бот запущен с поиском!")
 app.run_polling()
