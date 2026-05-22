@@ -13,7 +13,11 @@ from telegram.ext import (
 TELEGRAM_TOKEN = os.environ["BOT_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
-TEXT_MODEL = "openai/gpt-oss-120b:free"
+MODELS = [
+    "google/gemma-4-26b-a4b-it:free",
+    "openai/gpt-oss-20b:free",
+    "z-ai/glm-4.5-air:free",
+]
 
 memory = {}
 
@@ -25,7 +29,6 @@ def get_memory(user_id):
     return memory[user_id]
 
 def ask_ai(user_id, text):
-    url = "https://openrouter.ai/api/v1/chat/completions"
     messages = get_memory(user_id)
     messages.append({"role": "user", "content": text})
     memory[user_id] = messages[-12:]
@@ -34,23 +37,29 @@ def ask_ai(user_id, text):
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
-    data = {"model": TEXT_MODEL, "messages": memory[user_id]}
 
-    r = requests.post(url, headers=headers, json=data, timeout=30)
-    if r.status_code != 200:
-        print("AI error:", r.status_code, r.text[:300])
-        return "⚠️ Ошибка ИИ"
+    for model in MODELS:
+        try:
+            data = {"model": model, "messages": memory[user_id]}
+            r = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers, json=data, timeout=60
+            )
+            if r.status_code == 200:
+                answer = r.json()["choices"][0]["message"]["content"]
+                memory[user_id].append({"role": "assistant", "content": answer})
+                return answer
+            print(f"Model {model} failed: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            print(f"Model {model} error: {e}")
 
-    answer = r.json()["choices"][0]["message"]["content"]
-    memory[user_id].append({"role": "assistant", "content": answer})
-    return answer
+    return "⚠️ Все модели недоступны, попробуй позже"
 
 def generate_image(prompt):
     encoded = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
     r = requests.get(url, timeout=120)
     if r.status_code != 200:
-        print("IMG error:", r.status_code, r.text[:200])
         return None
     return r.content
 
@@ -73,6 +82,7 @@ async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     answer = ask_ai(user_id, text)
     await update.message.reply_text("🤖 " + answer)
 
