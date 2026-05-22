@@ -1,7 +1,7 @@
 import os
 import urllib.parse
 import requests
-from duckduckgo_search import DDGS
+from datetime import datetime
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -29,23 +29,51 @@ def get_memory(user_id):
 
 def web_search(query):
     try:
-        results = DDGS().text(query, max_results=3)
-        if not results:
-            return ""
-        parts = []
-        for r in results:
-            parts.append(f"- {r['title']}: {r['body'][:300]}")
-        return "\n".join(parts)
+        url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(query)}&format=json&no_html=1&skip_disambig=1"
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        results = []
+        if data.get("AbstractText"):
+            results.append(data["AbstractText"][:500])
+        for topic in data.get("RelatedTopics", [])[:4]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                results.append(topic["Text"][:300])
+        if results:
+            return "\n".join(results)
     except Exception as e:
-        print(f"Search error: {e}")
-        return ""
+        print(f"DDG instant answer error: {e}")
+
+    # Fallback: DuckDuckGo HTML lite
+    try:
+        url = f"https://lite.duckduckgo.com/lite/?q={urllib.parse.quote(query)}"
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        from html.parser import HTMLParser
+        class TextExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.texts = []
+                self.in_result = False
+            def handle_data(self, data):
+                t = data.strip()
+                if len(t) > 40:
+                    self.texts.append(t)
+        parser = TextExtractor()
+        parser.feed(r.text)
+        snippets = parser.texts[:5]
+        if snippets:
+            return "\n".join(snippets[:3])
+    except Exception as e:
+        print(f"DDG lite error: {e}")
+
+    return ""
 
 def ask_ai(user_id, text):
+    today = datetime.now().strftime("%d %B %Y")
     search_results = web_search(text)
 
-    system = "Ты дружелюбный полезный ассистент. Отвечай точно и актуально."
+    system = f"Ты дружелюбный полезный ассистент. Сегодняшняя дата: {today}. Отвечай точно и актуально на основе последних данных."
     if search_results:
-        system += f"\n\nАктуальные данные из интернета:\n{search_results}\n\nИспользуй эти данные в ответе."
+        system += f"\n\nАктуальные данные из интернета (используй их):\n{search_results}"
 
     messages = get_memory(user_id)
     messages.append({"role": "user", "content": text})
@@ -121,5 +149,5 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("img", img))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-print("Бот запущен с поиском!")
+print(f"Бот запущен! Дата: {datetime.now().strftime('%d.%m.%Y')}")
 app.run_polling()
