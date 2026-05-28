@@ -63,7 +63,6 @@ def web_search(query):
     return ""
 
 def translate_to_english(prompt):
-    """Translate prompt to English for better image generation."""
     try:
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -74,12 +73,13 @@ def translate_to_english(prompt):
             headers=headers,
             json={
                 "model": "google/gemma-4-26b-a4b-it:free",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"Translate this image description to English. Reply with ONLY the translation, nothing else: {prompt}"
-                    }
-                ]
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        f"Translate this image description to English and expand it with details "
+                        f"to make it vivid and complete. Reply with ONLY the English description, nothing else: {prompt}"
+                    )
+                }]
             },
             timeout=20
         )
@@ -87,7 +87,7 @@ def translate_to_english(prompt):
             return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"Translate error: {e}")
-    return prompt  # fallback to original
+    return prompt
 
 def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
@@ -127,9 +127,13 @@ def ask_ai(user_id, text):
 
 def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
-    print(f"Image prompt: '{prompt}' -> '{en_prompt}'")
-    encoded = urllib.parse.quote(en_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&enhance=true"
+    # Add quality keywords for better results
+    quality = "masterpiece, highly detailed, perfect anatomy, complete, sharp focus, high quality, 8k"
+    full_prompt = f"{en_prompt}, {quality}"
+    print(f"Image: '{prompt}' -> '{full_prompt[:80]}...'")
+    encoded = urllib.parse.quote(full_prompt)
+    # Use flux model — best free quality on Pollinations
+    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
     r = requests.get(url, timeout=120)
     if r.status_code != 200:
         return None
