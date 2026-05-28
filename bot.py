@@ -41,9 +41,7 @@ def web_search(query):
         if results:
             return "\n".join(results)
     except Exception as e:
-        print(f"DDG instant answer error: {e}")
-
-    # Fallback: DuckDuckGo HTML lite
+        print(f"DDG error: {e}")
     try:
         url = f"https://lite.duckduckgo.com/lite/?q={urllib.parse.quote(query)}"
         r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
@@ -52,26 +50,50 @@ def web_search(query):
             def __init__(self):
                 super().__init__()
                 self.texts = []
-                self.in_result = False
             def handle_data(self, data):
                 t = data.strip()
                 if len(t) > 40:
                     self.texts.append(t)
         parser = TextExtractor()
         parser.feed(r.text)
-        snippets = parser.texts[:5]
-        if snippets:
-            return "\n".join(snippets[:3])
+        if parser.texts:
+            return "\n".join(parser.texts[:3])
     except Exception as e:
         print(f"DDG lite error: {e}")
-
     return ""
+
+def translate_to_english(prompt):
+    """Translate prompt to English for better image generation."""
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": "google/gemma-4-26b-a4b-it:free",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Translate this image description to English. Reply with ONLY the translation, nothing else: {prompt}"
+                    }
+                ]
+            },
+            timeout=20
+        )
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"Translate error: {e}")
+    return prompt  # fallback to original
 
 def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
     search_results = web_search(text)
 
-    system = f"Ты дружелюбный полезный ассистент. Сегодняшняя дата: {today}. Отвечай точно и актуально на основе последних данных."
+    system = f"Ты дружелюбный полезный ассистент. Сегодняшняя дата: {today}. Отвечай точно и актуально."
     if search_results:
         system += f"\n\nАктуальные данные из интернета (используй их):\n{search_results}"
 
@@ -80,7 +102,6 @@ def ask_ai(user_id, text):
     memory[user_id] = messages[-12:]
 
     full_messages = [{"role": "system", "content": system}] + memory[user_id]
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
@@ -105,8 +126,10 @@ def ask_ai(user_id, text):
     return "⚠️ Все модели недоступны, попробуй позже"
 
 def generate_image(prompt):
-    encoded = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+    en_prompt = translate_to_english(prompt)
+    print(f"Image prompt: '{prompt}' -> '{en_prompt}'")
+    encoded = urllib.parse.quote(en_prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&enhance=true"
     r = requests.get(url, timeout=120)
     if r.status_code != 200:
         return None
