@@ -1,4 +1,5 @@
 import os
+import re
 import urllib.parse
 import requests
 from datetime import datetime
@@ -26,6 +27,16 @@ def get_memory(user_id):
     if user_id not in memory:
         memory[user_id] = []
     return memory[user_id]
+
+def clean_markdown(text):
+    text = re.sub(r'#{1,6}\s*', '', text)
+    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,2}([^_]+)_{1,2}', r'\1', text)
+    text = re.sub(r'`{1,3}[^`]*`{1,3}', lambda m: m.group().strip('`'), text)
+    text = re.sub(r'^\s*\|.*\|.*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*[-|]+[-|+\s]*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 def web_search(query):
     try:
@@ -93,7 +104,12 @@ def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
     search_results = web_search(text)
 
-    system = f"Ты дружелюбный полезный ассистент. Сегодняшняя дата: {today}. Отвечай точно и актуально."
+    system = (
+        f"Ты дружелюбный полезный ассистент. Сегодняшняя дата: {today}. "
+        f"Отвечай точно и актуально. "
+        f"ВАЖНО: пиши простым текстом без markdown-форматирования — "
+        f"без звёздочек, решёток, подчёркиваний, таблиц и других специальных символов."
+    )
     if search_results:
         system += f"\n\nАктуальные данные из интернета (используй их):\n{search_results}"
 
@@ -117,22 +133,21 @@ def ask_ai(user_id, text):
             )
             if r.status_code == 200:
                 answer = r.json()["choices"][0]["message"]["content"]
+                answer = clean_markdown(answer)
                 memory[user_id].append({"role": "assistant", "content": answer})
                 return answer
             print(f"Model {model} failed: {r.status_code} {r.text[:200]}")
         except Exception as e:
             print(f"Model {model} error: {e}")
 
-    return "⚠️ Все модели недоступны, попробуй позже"
+    return "Все модели недоступны, попробуй позже"
 
 def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
-    # Add quality keywords for better results
     quality = "masterpiece, highly detailed, perfect anatomy, complete, sharp focus, high quality, 8k"
     full_prompt = f"{en_prompt}, {quality}"
     print(f"Image: '{prompt}' -> '{full_prompt[:80]}...'")
     encoded = urllib.parse.quote(full_prompt)
-    # Use flux model — best free quality on Pollinations
     url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
     r = requests.get(url, timeout=120)
     if r.status_code != 200:
@@ -149,7 +164,7 @@ async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if image:
         await update.message.reply_photo(photo=image)
     else:
-        await update.message.reply_text("❌ ошибка генерации")
+        await update.message.reply_text("Ошибка генерации, попробуй снова")
     try:
         await msg.delete()
     except Exception:
@@ -164,11 +179,11 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет!\n\n"
-        "Я AI бот с поиском в интернете 🤖🌐\n\n"
-        "📌 Команды:\n"
-        "/img <описание> — создать изображение\n\n"
-        "💬 Просто напиши вопрос — найду актуальный ответ"
+        "Привет!\n\n"
+        "Я AI бот с поиском в интернете\n\n"
+        "Команды:\n"
+        "/img описание — создать изображение\n\n"
+        "Просто напиши вопрос — найду актуальный ответ"
     )
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
