@@ -32,13 +32,32 @@ def clean_markdown(text):
     text = re.sub(r'#{1,6}\s*', '', text)
     text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
     text = re.sub(r'_{1,2}([^_]+)_{1,2}', r'\1', text)
-    text = re.sub(r'`{1,3}[^`]*`{1,3}', lambda m: m.group().strip('`'), text)
+    text = re.sub(r'`{1,3}([^`]*)`{1,3}', r'\1', text)
     text = re.sub(r'^\s*\|.*\|.*$', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*[-|]+[-|+\s]*$', '', text, flags=re.MULTILINE)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
 def web_search(query):
+    try:
+        encoded = urllib.parse.quote(query)
+        url = f"https://s.jina.ai/{encoded}"
+        r = requests.get(url, timeout=20, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/plain"
+        })
+        if r.status_code == 200 and len(r.text) > 100:
+            lines = r.text.strip().split('\n')
+            result_lines = [l for l in lines if l.strip() and not l.startswith('http') and not l.startswith('[')]
+            snippet = '\n'.join(result_lines[:40])
+            if len(snippet) > 3000:
+                snippet = snippet[:3000]
+            if len(snippet) > 80:
+                print(f"Jina search OK: {len(snippet)} chars")
+                return snippet
+    except Exception as e:
+        print(f"Jina error: {e}")
+
     try:
         url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(query)}&format=json&no_html=1&skip_disambig=1"
         r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
@@ -53,24 +72,7 @@ def web_search(query):
             return "\n".join(results)
     except Exception as e:
         print(f"DDG error: {e}")
-    try:
-        url = f"https://lite.duckduckgo.com/lite/?q={urllib.parse.quote(query)}"
-        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        from html.parser import HTMLParser
-        class TextExtractor(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.texts = []
-            def handle_data(self, data):
-                t = data.strip()
-                if len(t) > 40:
-                    self.texts.append(t)
-        parser = TextExtractor()
-        parser.feed(r.text)
-        if parser.texts:
-            return "\n".join(parser.texts[:3])
-    except Exception as e:
-        print(f"DDG lite error: {e}")
+
     return ""
 
 def translate_to_english(prompt):
@@ -105,13 +107,17 @@ def ask_ai(user_id, text):
     search_results = web_search(text)
 
     system = (
-        f"Ты дружелюбный полезный ассистент. Сегодняшняя дата: {today}. "
-        f"Отвечай точно и актуально. "
+        f"Ты дружелюбный и точный ассистент. Сегодняшняя дата: {today}.\n"
+        f"Если тебе предоставлены актуальные данные из интернета — используй их как основу ответа и не придумывай факты.\n"
+        f"Если информации недостаточно или ты не уверен — честно скажи об этом.\n"
         f"ВАЖНО: пиши простым текстом без markdown-форматирования — "
-        f"без звёздочек, решёток, подчёркиваний, таблиц и других специальных символов."
+        f"без звёздочек, решёток, подчёркиваний, таблиц и других специальных символов. "
+        f"Только обычный текст."
     )
     if search_results:
-        system += f"\n\nАктуальные данные из интернета (используй их):\n{search_results}"
+        system += f"\n\nАктуальные данные из интернета:\n{search_results}"
+    else:
+        system += "\n\nПоиск не дал результатов. Отвечай на основе своих знаний и обязательно предупреди, если информация может быть устаревшей."
 
     messages = get_memory(user_id)
     messages.append({"role": "user", "content": text})
