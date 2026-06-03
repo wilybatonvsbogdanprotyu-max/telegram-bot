@@ -157,13 +157,13 @@ def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
     full_prompt = en_prompt + ", masterpiece, highly detailed, sharp focus, high quality"
     print("Generating: " + full_prompt[:80])
-    # HuggingFace Inference API - models without license gates
     models = [
         "stabilityai/stable-diffusion-2-1",
         "Lykon/dreamshaper-8",
         "prompthero/openjourney-v4",
         "CompVis/stable-diffusion-v1-4",
     ]
+    last_error = "unknown"
     for model in models:
         try:
             print("Trying HF model: " + model)
@@ -177,12 +177,14 @@ def generate_image(prompt):
             print("HF " + model.split("/")[1] + ": status=" + str(r.status_code) + " ct=" + ct[:20])
             if r.status_code == 200 and ct.startswith("image"):
                 print("HF success: " + str(len(r.content)) + " bytes")
-                return r.content
+                return (r.content, None)
             else:
-                print("HF error body: " + r.text[:200])
+                last_error = str(r.status_code) + ": " + r.text[:100]
+                print("HF error: " + last_error)
         except Exception as e:
+            last_error = "exception: " + str(e)[:80]
             print("HF exception " + model + ": " + str(e))
-    return None
+    return (None, last_error)
 
 def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
@@ -237,11 +239,13 @@ async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напиши: /img кот в космосе")
         return
     msg = await update.message.reply_text("🎨 создаю изображение...")
-    image = generate_image(prompt)
+    result = generate_image(prompt)
+    image, error = result if isinstance(result, tuple) else (result, None)
     if image:
         await update.message.reply_photo(photo=image)
     else:
-        await update.message.reply_text("Ошибка генерации, попробуй снова")
+        err_msg = "Ошибка: " + (error or "неизвестно")
+        await update.message.reply_text(err_msg[:200])
     try:
         await msg.delete()
     except Exception:
