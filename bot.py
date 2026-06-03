@@ -157,25 +157,31 @@ def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
     full_prompt = en_prompt + ", masterpiece, highly detailed, sharp focus, high quality"
     print("Generating: " + full_prompt[:80])
-    # Try HuggingFace FLUX.1-schnell
+    # HuggingFace Inference API - models without license gates
     models = [
-        "black-forest-labs/FLUX.1-schnell",
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        "runwayml/stable-diffusion-v1-5",
+        "stabilityai/stable-diffusion-2-1",
+        "Lykon/dreamshaper-8",
+        "prompthero/openjourney-v4",
+        "CompVis/stable-diffusion-v1-4",
     ]
     for model in models:
         try:
+            print("Trying HF model: " + model)
             r = requests.post(
                 "https://api-inference.huggingface.co/models/" + model,
                 headers={"Authorization": "Bearer " + HF_TOKEN, "Content-Type": "application/json"},
-                json={"inputs": full_prompt},
-                timeout=60
+                json={"inputs": full_prompt, "options": {"wait_for_model": True}},
+                timeout=90
             )
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+            ct = r.headers.get("content-type", "")
+            print("HF " + model.split("/")[1] + ": status=" + str(r.status_code) + " ct=" + ct[:20])
+            if r.status_code == 200 and ct.startswith("image"):
+                print("HF success: " + str(len(r.content)) + " bytes")
                 return r.content
-            print("HF model " + model + " status: " + str(r.status_code) + " " + r.text[:100])
+            else:
+                print("HF error body: " + r.text[:200])
         except Exception as e:
-            print("HF error " + model + ": " + str(e))
+            print("HF exception " + model + ": " + str(e))
     return None
 
 def ask_ai(user_id, text):
