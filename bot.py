@@ -152,21 +152,12 @@ def translate_to_english(prompt):
         print("Translate error: " + str(e))
     return prompt
 
-def generate_image(prompt):
+def generate_image_url(prompt):
     en_prompt = translate_to_english(prompt)
     full_prompt = en_prompt + ", masterpiece, highly detailed, sharp focus, high quality"
-    print("Generating: " + full_prompt[:80])
-    try:
-        encoded = urllib.parse.quote(full_prompt)
-        url = "https://image.pollinations.ai/prompt/" + encoded
-        r = requests.get(url, timeout=120)
-        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
-            return r.content
-        print("Pollinations failed: " + str(r.status_code))
-        return None
-    except Exception as e:
-        print("Image error: " + str(e))
-        return None
+    print("Generating URL for: " + full_prompt[:80])
+    encoded = urllib.parse.quote(full_prompt)
+    return "https://image.pollinations.ai/prompt/" + encoded + "?nologo=true&seed=" + str(int(datetime.now().timestamp()))
 
 def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
@@ -220,11 +211,12 @@ async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt:
         await update.message.reply_text("Напиши: /img кот в космосе")
         return
-    msg = await update.message.reply_text("🎨 создаю изображение (1-2 минуты)...")
-    image = generate_image(prompt)
-    if image:
-        await update.message.reply_photo(photo=image)
-    else:
+    msg = await update.message.reply_text("🎨 создаю изображение...")
+    try:
+        url = generate_image_url(prompt)
+        await update.message.reply_photo(photo=url)
+    except Exception as e:
+        print("img handler error: " + str(e))
         await update.message.reply_text("Ошибка генерации, попробуй снова")
     try:
         await msg.delete()
