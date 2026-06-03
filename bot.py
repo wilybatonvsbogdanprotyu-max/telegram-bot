@@ -184,7 +184,7 @@ def generate_image(prompt):
     quality = "masterpiece, highly detailed, perfect anatomy, complete, sharp focus, high quality, 8k"
     full_prompt = en_prompt + ", " + quality
     encoded = urllib.parse.quote(full_prompt)
-    url = "https://image.pollinations.ai/prompt/" + encoded + "?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+    url = "https://image.pollinations.ai/prompt/" + encoded + "?model=turbo&width=1024&height=1024&nologo=true&enhance=true"
     r = requests.get(url, timeout=120)
     if r.status_code != 200:
         return None
