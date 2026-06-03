@@ -47,68 +47,88 @@ def jina_read(url):
         )
         if r.status_code == 200 and len(r.text) > 200:
             lines = r.text.split('\n')
-            clean = [l for l in lines if l.strip() and not l.startswith('!') and not l.startswith('[Image')]
-            snippet = '\n'.join(clean[:60])
-            return snippet[:3000]
+            clean_lines = [l for l in lines if l.strip()
+                           and not l.startswith('!')
+                           and not l.startswith('[Image')
+                           and not l.startswith('URL Source')
+                           and not l.startswith('Title:')]
+            return '\n'.join(clean_lines[:60])[:3000]
     except Exception as e:
         print("Jina read error: " + str(e))
     return ""
 
+def parse_ddg_urls(text):
+    urls = re.findall(r'uddg=(https?[^&\s\)]+)', text)
+    return [urllib.parse.unquote(u) for u in urls[:3]]
+
 def web_search(query):
-    urls_found = []
-    content_parts = []
+    snippets = []
+    page_urls = []
 
-    # Step 1: DDG JSON API
+    # Step 1: DDG lite via Jina reader — gets real search results
     try:
         enc = urllib.parse.quote(query)
         r = requests.get(
-            "https://api.duckduckgo.com/?q=" + enc + "&format=json&no_html=1&skip_disambig=1",
-            timeout=10,
-            headers={"User-Agent": "Mozilla/5.0"}
+            "https://r.jina.ai/https://lite.duckduckgo.com/lite/?q=" + enc,
+            timeout=18,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "text/plain"}
         )
-        data = r.json()
-        if data.get("AbstractText"):
-            content_parts.append(data["AbstractText"][:500])
-        if data.get("AbstractURL"):
-            urls_found.append(data["AbstractURL"])
-        for topic in data.get("RelatedTopics", [])[:3]:
-            if isinstance(topic, dict):
-                if topic.get("Text"):
-                    content_parts.append(topic["Text"][:200])
-                if topic.get("FirstURL"):
-                    urls_found.append(topic["FirstURL"])
+        if r.status_code == 200 and len(r.text) > 300:
+            # Extract snippets (lines with actual text content)
+            lines = r.text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if len(line) > 60 and not line.startswith('*') and not line.startswith('[') and 'duckduckgo.com' not in line:
+                    snippets.append(line[:300])
+                if len(snippets) >= 5:
+                    break
+            # Extract real URLs from DDG redirect links
+            page_urls = parse_ddg_urls(r.text)
+            print("DDG lite: " + str(len(snippets)) + " snippets, " + str(len(page_urls)) + " URLs")
     except Exception as e:
-        print("DDG error: " + str(e))
+        print("DDG lite error: " + str(e))
 
-    # Step 2: Wikipedia API
-    try:
-        enc = urllib.parse.quote(query)
-        r = requests.get(
-            "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + enc + "&format=json&srlimit=2&srprop=snippet",
-            timeout=10
-        )
-        wiki = r.json()
-        for item in wiki.get("query", {}).get("search", []):
-            snippet = re.sub(r'<[^>]+>', '', item.get("snippet", ""))
-            if snippet:
-                content_parts.append(snippet)
-            title = item.get("title", "").replace(" ", "_")
-            if title:
-                urls_found.append("https://en.wikipedia.org/wiki/" + title)
-    except Exception as e:
-        print("Wikipedia error: " + str(e))
-
-    # Step 3: Jina reader on first good URL
-    for url in urls_found[:2]:
+    # Step 2: Read first result page with Jina
+    page_content = ""
+    for url in page_urls:
         if url and url.startswith("http") and "duckduckgo.com" not in url:
-            page = jina_read(url)
-            if page:
-                content_parts.insert(0, "[From " + url + "]\n" + page)
+            content = jina_read(url)
+            if content and len(content) > 200:
+                page_content = content
+                print("Read page: " + url[:60])
                 break
 
-    result = "\n\n".join(content_parts)
+    # Step 3: Wikipedia as extra source
+    if not snippets:
+        try:
+            enc = urllib.parse.quote(query)
+            r = requests.get(
+                "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + enc + "&format=json&srlimit=2&srprop=snippet",
+                timeout=10
+            )
+            wiki = r.json()
+            for item in wiki.get("query", {}).get("search", []):
+                s = re.sub(r'<[^>]+>', '', item.get("snippet", ""))
+                if s:
+                    snippets.append(s)
+                title = item.get("title", "").replace(" ", "_")
+                if title and not page_content:
+                    c = jina_read("https://en.wikipedia.org/wiki/" + title)
+                    if c:
+                        page_content = c
+                        break
+        except Exception as e:
+            print("Wikipedia error: " + str(e))
+
+    parts = []
+    if page_content:
+        parts.append(page_content)
+    if snippets:
+        parts.append("Результаты поиска:\n" + "\n".join(snippets))
+
+    result = "\n\n".join(parts)
     if result:
-        print("Search OK: " + str(len(result)) + " chars")
+        print("Search total: " + str(len(result)) + " chars")
     return result[:4000]
 
 def translate_to_english(prompt):
@@ -139,16 +159,22 @@ def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
     search_results = web_search(text)
 
-    system = (
-        "Ты дружелюбный и точный ассистент. Сегодняшняя дата: " + today + ".\n"
-        "Тебе предоставлены актуальные данные из интернета — используй их как основной источник и доверяй им больше чем своим базовым знаниям.\n"
-        "Если информации из поиска достаточно — отвечай на её основе. Если нет — честно скажи что не уверен.\n"
-        "ВАЖНО: пиши простым текстом без markdown — без звёздочек, решёток, подчёркиваний, таблиц и специальных символов. Только обычный текст."
-    )
     if search_results:
-        system += "\n\nАктуальные данные из интернета:\n" + search_results
+        system = (
+            "Ты дружелюбный и точный ассистент. Сегодняшняя дата: " + today + ".\n"
+            "Ниже — актуальные данные из интернета. Используй их как главный источник, доверяй им больше своих базовых знаний.\n"
+            "Если данных из поиска достаточно — отвечай на их основе. Если нет — честно скажи что не уверен.\n"
+            "ВАЖНО: пиши простым текстом без markdown — без звёздочек, решёток, подчёркиваний, таблиц. Только обычный текст.\n\n"
+            "Данные из интернета:\n" + search_results
+        )
     else:
-        system += "\n\nПоиск не дал результатов. Отвечай из своих знаний и предупреди если информация может быть устаревшей."
+        # Когда поиск не дал результатов — НЕ говорим об этом модели,
+        # просто отвечает из своих знаний без упоминания интернета
+        system = (
+            "Ты дружелюбный и точный ассистент. Сегодняшняя дата: " + today + ".\n"
+            "Отвечай точно и по делу. Если не уверен в актуальности информации — предупреди об этом кратко.\n"
+            "ВАЖНО: пиши простым текстом без markdown — без звёздочек, решёток, подчёркиваний, таблиц. Только обычный текст."
+        )
 
     messages = get_memory(user_id)
     messages.append({"role": "user", "content": text})
@@ -181,7 +207,7 @@ def ask_ai(user_id, text):
 
 def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
-    quality = "masterpiece, highly detailed, perfect anatomy, complete, sharp focus, high quality, 8k"
+    quality = "masterpiece, highly detailed, sharp focus, high quality, 8k"
     full_prompt = en_prompt + ", " + quality
     encoded = urllib.parse.quote(full_prompt)
     url = "https://image.pollinations.ai/prompt/" + encoded + "?model=turbo&width=1024&height=1024&nologo=true&enhance=true"
