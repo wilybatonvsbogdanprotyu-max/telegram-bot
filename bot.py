@@ -16,6 +16,7 @@ from telegram.ext import (
 
 TELEGRAM_TOKEN = os.environ["BOT_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 MODELS = [
     "google/gemma-4-26b-a4b-it:free",
@@ -152,12 +153,30 @@ def translate_to_english(prompt):
         print("Translate error: " + str(e))
     return prompt
 
-def generate_image_url(prompt):
+def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
     full_prompt = en_prompt + ", masterpiece, highly detailed, sharp focus, high quality"
-    print("Generating URL for: " + full_prompt[:80])
-    encoded = urllib.parse.quote(full_prompt)
-    return "https://image.pollinations.ai/prompt/" + encoded + "?nologo=true&seed=" + str(int(datetime.now().timestamp()))
+    print("Generating: " + full_prompt[:80])
+    # Try HuggingFace FLUX.1-schnell
+    models = [
+        "black-forest-labs/FLUX.1-schnell",
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        "runwayml/stable-diffusion-v1-5",
+    ]
+    for model in models:
+        try:
+            r = requests.post(
+                "https://api-inference.huggingface.co/models/" + model,
+                headers={"Authorization": "Bearer " + HF_TOKEN, "Content-Type": "application/json"},
+                json={"inputs": full_prompt},
+                timeout=60
+            )
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                return r.content
+            print("HF model " + model + " status: " + str(r.status_code) + " " + r.text[:100])
+        except Exception as e:
+            print("HF error " + model + ": " + str(e))
+    return None
 
 def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
@@ -212,11 +231,10 @@ async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напиши: /img кот в космосе")
         return
     msg = await update.message.reply_text("🎨 создаю изображение...")
-    try:
-        url = generate_image_url(prompt)
-        await update.message.reply_photo(photo=url)
-    except Exception as e:
-        print("img handler error: " + str(e))
+    image = generate_image(prompt)
+    if image:
+        await update.message.reply_photo(photo=image)
+    else:
         await update.message.reply_text("Ошибка генерации, попробуй снова")
     try:
         await msg.delete()
