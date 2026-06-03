@@ -156,73 +156,16 @@ def generate_image(prompt):
     en_prompt = translate_to_english(prompt)
     full_prompt = en_prompt + ", masterpiece, highly detailed, sharp focus, high quality"
     print("Generating: " + full_prompt[:80])
-
     try:
-        # Submit job to Stable Horde (free community GPU)
-        r = requests.post(
-            "https://stablehorde.net/api/v2/generate/async",
-            headers={"Content-Type": "application/json", "apikey": "0000000000"},
-            json={
-                "prompt": full_prompt,
-                "params": {
-                    "width": 512,
-                    "height": 512,
-                    "steps": 25,
-                    "n": 1,
-                    "sampler_name": "k_euler_a"
-                },
-                "models": ["stable_diffusion"],
-                "r2": True,
-                "shared": False
-            },
-            timeout=20
-        )
-        if r.status_code != 202:
-            print("Horde submit failed: " + str(r.status_code) + " " + r.text[:200])
-            return None
-
-        job_id = r.json()["id"]
-        print("Horde job id: " + job_id)
-
-        # Poll until done (max 3 minutes)
-        for i in range(36):
-            time.sleep(5)
-            check = requests.get(
-                "https://stablehorde.net/api/v2/generate/check/" + job_id,
-                timeout=10
-            ).json()
-            print("Horde check " + str(i) + ": done=" + str(check.get("done")) + " queue=" + str(check.get("queue_position")))
-            if check.get("done"):
-                break
-        else:
-            print("Horde timeout")
-            return None
-
-        # Get result
-        result = requests.get(
-            "https://stablehorde.net/api/v2/generate/status/" + job_id,
-            timeout=15
-        ).json()
-
-        generations = result.get("generations", [])
-        if not generations:
-            print("Horde: no generations in result")
-            return None
-
-        img_data = generations[0].get("img", "")
-        if not img_data:
-            print("Horde: empty img field")
-            return None
-
-        # img can be base64 or a URL
-        if img_data.startswith("http"):
-            img_r = requests.get(img_data, timeout=30)
-            return img_r.content
-        else:
-            return base64.b64decode(img_data)
-
+        encoded = urllib.parse.quote(full_prompt)
+        url = "https://image.pollinations.ai/prompt/" + encoded
+        r = requests.get(url, timeout=120)
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+            return r.content
+        print("Pollinations failed: " + str(r.status_code))
+        return None
     except Exception as e:
-        print("Horde error: " + str(e))
+        print("Image error: " + str(e))
         return None
 
 def ask_ai(user_id, text):
