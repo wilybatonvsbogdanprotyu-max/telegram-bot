@@ -1,5 +1,7 @@
 import os
 import re
+import time
+import base64
 import urllib.parse
 import requests
 from datetime import datetime
@@ -65,7 +67,6 @@ def web_search(query):
     snippets = []
     page_urls = []
 
-    # Step 1: DDG lite via Jina reader — gets real search results
     try:
         enc = urllib.parse.quote(query)
         r = requests.get(
@@ -74,7 +75,6 @@ def web_search(query):
             headers={"User-Agent": "Mozilla/5.0", "Accept": "text/plain"}
         )
         if r.status_code == 200 and len(r.text) > 300:
-            # Extract snippets (lines with actual text content)
             lines = r.text.split('\n')
             for line in lines:
                 line = line.strip()
@@ -82,13 +82,11 @@ def web_search(query):
                     snippets.append(line[:300])
                 if len(snippets) >= 5:
                     break
-            # Extract real URLs from DDG redirect links
             page_urls = parse_ddg_urls(r.text)
             print("DDG lite: " + str(len(snippets)) + " snippets, " + str(len(page_urls)) + " URLs")
     except Exception as e:
         print("DDG lite error: " + str(e))
 
-    # Step 2: Read first result page with Jina
     page_content = ""
     for url in page_urls:
         if url and url.startswith("http") and "duckduckgo.com" not in url:
@@ -98,7 +96,6 @@ def web_search(query):
                 print("Read page: " + url[:60])
                 break
 
-    # Step 3: Wikipedia as extra source
     if not snippets:
         try:
             enc = urllib.parse.quote(query)
@@ -144,7 +141,7 @@ def translate_to_english(prompt):
                 "model": "google/gemma-4-26b-a4b-it:free",
                 "messages": [{
                     "role": "user",
-                    "content": "Translate this image description to English and expand it with details to make it vivid and complete. Reply with ONLY the English description, nothing else: " + prompt
+                    "content": "Translate this image description to English and expand it with vivid details. Reply with ONLY the English description, nothing else: " + prompt
                 }]
             },
             timeout=20
@@ -155,6 +152,79 @@ def translate_to_english(prompt):
         print("Translate error: " + str(e))
     return prompt
 
+def generate_image(prompt):
+    en_prompt = translate_to_english(prompt)
+    full_prompt = en_prompt + ", masterpiece, highly detailed, sharp focus, high quality"
+    print("Generating: " + full_prompt[:80])
+
+    try:
+        # Submit job to Stable Horde (free community GPU)
+        r = requests.post(
+            "https://stablehorde.net/api/v2/generate/async",
+            headers={"Content-Type": "application/json", "apikey": "0000000000"},
+            json={
+                "prompt": full_prompt,
+                "params": {
+                    "width": 512,
+                    "height": 512,
+                    "steps": 25,
+                    "n": 1,
+                    "sampler_name": "k_euler_a"
+                },
+                "models": ["stable_diffusion"],
+                "r2": True,
+                "shared": False
+            },
+            timeout=20
+        )
+        if r.status_code != 202:
+            print("Horde submit failed: " + str(r.status_code) + " " + r.text[:200])
+            return None
+
+        job_id = r.json()["id"]
+        print("Horde job id: " + job_id)
+
+        # Poll until done (max 3 minutes)
+        for i in range(36):
+            time.sleep(5)
+            check = requests.get(
+                "https://stablehorde.net/api/v2/generate/check/" + job_id,
+                timeout=10
+            ).json()
+            print("Horde check " + str(i) + ": done=" + str(check.get("done")) + " queue=" + str(check.get("queue_position")))
+            if check.get("done"):
+                break
+        else:
+            print("Horde timeout")
+            return None
+
+        # Get result
+        result = requests.get(
+            "https://stablehorde.net/api/v2/generate/status/" + job_id,
+            timeout=15
+        ).json()
+
+        generations = result.get("generations", [])
+        if not generations:
+            print("Horde: no generations in result")
+            return None
+
+        img_data = generations[0].get("img", "")
+        if not img_data:
+            print("Horde: empty img field")
+            return None
+
+        # img can be base64 or a URL
+        if img_data.startswith("http"):
+            img_r = requests.get(img_data, timeout=30)
+            return img_r.content
+        else:
+            return base64.b64decode(img_data)
+
+    except Exception as e:
+        print("Horde error: " + str(e))
+        return None
+
 def ask_ai(user_id, text):
     today = datetime.now().strftime("%d %B %Y")
     search_results = web_search(text)
@@ -162,17 +232,14 @@ def ask_ai(user_id, text):
     if search_results:
         system = (
             "Ты дружелюбный и точный ассистент. Сегодняшняя дата: " + today + ".\n"
-            "Ниже — актуальные данные из интернета. Используй их как главный источник, доверяй им больше своих базовых знаний.\n"
-            "Если данных из поиска достаточно — отвечай на их основе. Если нет — честно скажи что не уверен.\n"
+            "Ниже — актуальные данные из интернета. Используй их как главный источник.\n"
             "ВАЖНО: пиши простым текстом без markdown — без звёздочек, решёток, подчёркиваний, таблиц. Только обычный текст.\n\n"
             "Данные из интернета:\n" + search_results
         )
     else:
-        # Когда поиск не дал результатов — НЕ говорим об этом модели,
-        # просто отвечает из своих знаний без упоминания интернета
         system = (
             "Ты дружелюбный и точный ассистент. Сегодняшняя дата: " + today + ".\n"
-            "Отвечай точно и по делу. Если не уверен в актуальности информации — предупреди об этом кратко.\n"
+            "Отвечай точно и по делу. Если не уверен в актуальности — предупреди кратко.\n"
             "ВАЖНО: пиши простым текстом без markdown — без звёздочек, решёток, подчёркиваний, таблиц. Только обычный текст."
         )
 
@@ -205,23 +272,12 @@ def ask_ai(user_id, text):
 
     return "Все модели недоступны, попробуй позже"
 
-def generate_image(prompt):
-    en_prompt = translate_to_english(prompt)
-    quality = "masterpiece, highly detailed, sharp focus, high quality, 8k"
-    full_prompt = en_prompt + ", " + quality
-    encoded = urllib.parse.quote(full_prompt)
-    url = "https://image.pollinations.ai/prompt/" + encoded + "?model=turbo&width=1024&height=1024&nologo=true&enhance=true"
-    r = requests.get(url, timeout=120)
-    if r.status_code != 200:
-        return None
-    return r.content
-
 async def img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
         await update.message.reply_text("Напиши: /img кот в космосе")
         return
-    msg = await update.message.reply_text("🎨 создаю изображение...")
+    msg = await update.message.reply_text("🎨 создаю изображение (1-2 минуты)...")
     image = generate_image(prompt)
     if image:
         await update.message.reply_photo(photo=image)
